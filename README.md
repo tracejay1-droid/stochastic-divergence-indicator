@@ -7,12 +7,9 @@ Professional structural stochastic divergence indicator (MT4 / MT5).
 
 ## Current scope
 - Stage 1 structural swing engine (price + stochastic impulse/retracement confirmation)
-- Stage 2 ABC extraction from confirmed swings (A/B/C sequence selection)
-- Stage 2 time alignment gate between price and stochastic ABC points (`InpABCMaxBarGap`)
-- Stage 2 ABC drawing on chart:
-  - Price ABC (A→B and B→C + A/B/C labels) in main window
-  - Stochastic ABC (A→B and B→C + A/B/C labels) in indicator subwindow
+- Stage 2 ABC extraction / labeling and divergence line rendering on price + stochastic
+- Stage 3 divergence taxonomy implementation: A1/A2/A3/A4, B1/B2, C1/C2, D1/D2, E1/E2
+- Early alert trigger by divergence completion point (B or C by type), once per new divergence
 - Dedicated stochastic subwindow output (`#property indicator_separate_window`)
 - Always-plotted stochastic main/signal lines (default 5,3,3)
-- Extensive debug logs in MT4/MT5 using `[DEBUG][MT4]` and `[DEBUG][MT5]` tags
 - No WebRequest or internet calls in indicator code

@@ -8,15 +8,12 @@
 #property indicator_type1 DRAW_LINE
 #property indicator_color1 DeepSkyBlue
 #property indicator_label1 "Stoch Main"
-
 #property indicator_type2 DRAW_LINE
 #property indicator_color2 Orange
 #property indicator_label2 "Stoch Signal"
-
 #property indicator_type3 DRAW_ARROW
 #property indicator_color3 LimeGreen
 #property indicator_label3 "Stoch Swing High"
-
 #property indicator_type4 DRAW_ARROW
 #property indicator_color4 Tomato
 #property indicator_label4 "Stoch Swing Low"
@@ -35,8 +32,17 @@ input double InpEMASlopeATRMult    = 0.05;
 input double InpStochImpulse       = 18.0;
 input double InpStochRetrace       = 10.0;
 input int    InpABCMaxBarGap       = 8;
+input double InpEqualAtrMult       = 0.20;
+input double InpSweepAtrMult       = 0.05;
+input bool   InpEnableB1B2         = true;
+input bool   InpEnableC1C2         = true;
+input double InpOrderblockHigh     = 0.0;
+input double InpOrderblockLow      = 0.0;
+input double InpSupplyZone         = 0.0;
+input double InpDemandZone         = 0.0;
+input double InpZoneAtrMult        = 0.30;
+input bool   InpEnableAlerts       = true;
 input bool   InpDebugLogs          = true;
-input int    InpDebugBarStep       = 50;
 
 double StochMainBuffer[];
 double StochSignalBuffer[];
@@ -49,454 +55,158 @@ double ATRBuffer[];
 double EMAFastBuffer[];
 double EMASlowBuffer[];
 
-int atrHandle=INVALID_HANDLE;
-int emaFastHandle=INVALID_HANDLE;
-int emaSlowHandle=INVALID_HANDLE;
-int stochHandle=INVALID_HANDLE;
-string ST2_PREFIX="PSD_STAGE2_MT5_";
+int atrHandle=INVALID_HANDLE, emaFastHandle=INVALID_HANDLE, emaSlowHandle=INVALID_HANDLE, stochHandle=INVALID_HANDLE;
+string PREFIX="PSD_DIV_MT5_";
+string gLastAlertKey="";
+datetime gLastAlertWhen=0;
 
-void DebugPrint(string msg)
+void Dbg(string s){ if(InpDebugLogs) PrintFormat("[DEBUG][MT5] %s | chart=%I64d symbol=%s",s,ChartID(),_Symbol); }
+string TfStr(){ return(EnumToString((ENUM_TIMEFRAMES)_Period)); }
+
+void ResetWorkingBuffers(int total){ for(int i=0;i<total;i++){StochSwingHighBuffer[i]=EMPTY_VALUE;StochSwingLowBuffer[i]=EMPTY_VALUE;PriceSwingHighState[i]=EMPTY_VALUE;PriceSwingLowState[i]=EMPTY_VALUE;}}
+
+void EvaluatePriceStructure(const int total,const double &high[],const double &low[],const double &close[])
 {
-   if(InpDebugLogs)
-      PrintFormat("[DEBUG][MT5] %s | chart=%I64d symbol=%s", msg, ChartID(), _Symbol);
-}
-
-bool ShouldLogBar(const int i)
-{
-   if(!InpDebugLogs) return(false);
-   if(InpDebugBarStep <= 0) return(true);
-   return((i % InpDebugBarStep) == 0 || i < 5);
-}
-
-void ResetWorkingBuffers(const int rates_total)
-{
-   DebugPrint("[OnCalculate] Before ResetWorkingBuffers");
-   for(int i=0;i<rates_total;i++)
-   {
-      StochSwingHighBuffer[i]=EMPTY_VALUE;
-      StochSwingLowBuffer[i]=EMPTY_VALUE;
-      PriceSwingHighState[i]=EMPTY_VALUE;
-      PriceSwingLowState[i]=EMPTY_VALUE;
-   }
-   DebugPrint("[OnCalculate] After ResetWorkingBuffers");
-}
-
-void EvaluatePriceStructure(const int rates_total,
-                            const double &high[],
-                            const double &low[],
-                            const double &close[])
-{
-   DebugPrint("[OnCalculate] Before EvaluatePriceStructure");
-
-   int start=rates_total-2;
-   int dir=0;
-   int extremeBar=start;
-   double extreme=close[start];
-   double legStart=close[start];
-
+   int start=total-2,dir=0,extBar=start; double ext=close[start],legStart=close[start];
    for(int i=start;i>=1;i--)
    {
-      double atr=ATRBuffer[i];
-      if(atr<=0.0) continue;
-
-      double atrSum=0.0;
-      int count=0;
-      for(int n=0;n<10 && (i+n)<rates_total;n++)
-      {
-         atrSum += ATRBuffer[i+n];
-         count++;
-      }
-      double atrAvg=(count>0?atrSum/count:atr);
-
-      double emaFast=EMAFastBuffer[i];
-      double emaSlow=EMASlowBuffer[i];
-      double emaFastPrev=EMAFastBuffer[i+1];
-
-      bool compressed=(atrAvg>0.0 && atr < atrAvg*InpCompressionFactor);
+      double atr=ATRBuffer[i]; if(atr<=0) continue;
+      double atrSum=0; int c=0; for(int n=0;n<10 && i+n<total;n++){atrSum+=ATRBuffer[i+n];c++;}
+      double atrAvg=(c>0?atrSum/c:atr);
+      double emaFast=EMAFastBuffer[i], emaSlow=EMASlowBuffer[i], emaFastPrev=EMAFastBuffer[i+1];
+      bool compressed=(atrAvg>0 && atr<atrAvg*InpCompressionFactor);
       bool emaQualified=(MathAbs(emaFast-emaSlow)>=atr*InpEMASepATRMult || MathAbs(emaFast-emaFastPrev)>=atr*InpEMASlopeATRMult);
-
-      if(ShouldLogBar(i))
-         PrintFormat("[DEBUG][MT5][PriceLoop] i=%d atr=%.5f atrAvg=%.5f dir=%d close=%.5f emaFast=%.5f emaSlow=%.5f | chart=%I64d symbol=%s",i,atr,atrAvg,dir,close[i],emaFast,emaSlow,ChartID(),_Symbol);
-
-      if(dir==0)
-      {
-         legStart=close[i+1];
-         extreme=close[i+1];
-         extremeBar=i+1;
-
-         if(!compressed && emaQualified)
-         {
-            if(close[i]-legStart>=atr*InpImpulseATRMult)
-            {
-               dir=1;
-               extreme=high[i];
-               extremeBar=i;
-            }
-            else if(legStart-close[i]>=atr*InpImpulseATRMult)
-            {
-               dir=-1;
-               extreme=low[i];
-               extremeBar=i;
-            }
-         }
-      }
-      else if(dir==1)
-      {
-         if(high[i]>extreme)
-         {
-            extreme=high[i];
-            extremeBar=i;
-         }
-
-         if(extreme-low[i]>=atr*InpRetraceATRMult)
-         {
-            PriceSwingHighState[extremeBar]=high[extremeBar];
-            dir=-1;
-            legStart=extreme;
-            extreme=low[i];
-            extremeBar=i;
-         }
-      }
-      else
-      {
-         if(low[i]<extreme)
-         {
-            extreme=low[i];
-            extremeBar=i;
-         }
-
-         if(high[i]-extreme>=atr*InpRetraceATRMult)
-         {
-            PriceSwingLowState[extremeBar]=low[extremeBar];
-            dir=1;
-            legStart=extreme;
-            extreme=high[i];
-            extremeBar=i;
-         }
-      }
+      if(dir==0){legStart=close[i+1]; ext=close[i+1]; extBar=i+1; if(!compressed&&emaQualified){if(close[i]-legStart>=atr*InpImpulseATRMult){dir=1;ext=high[i];extBar=i;} else if(legStart-close[i]>=atr*InpImpulseATRMult){dir=-1;ext=low[i];extBar=i;}}}
+      else if(dir==1){if(high[i]>ext){ext=high[i];extBar=i;} if(ext-low[i]>=atr*InpRetraceATRMult){PriceSwingHighState[extBar]=high[extBar];dir=-1;legStart=ext;ext=low[i];extBar=i;}}
+      else {if(low[i]<ext){ext=low[i];extBar=i;} if(high[i]-ext>=atr*InpRetraceATRMult){PriceSwingLowState[extBar]=low[extBar];dir=1;legStart=ext;ext=high[i];extBar=i;}}
    }
-
-   DebugPrint("[OnCalculate] After EvaluatePriceStructure");
 }
 
-void EvaluateStochasticStructure(const int rates_total)
+void EvaluateStochStructure(const int total)
 {
-   DebugPrint("[OnCalculate] Before EvaluateStochasticStructure");
-
-   int start=rates_total-2;
-   int dir=0;
-   int extremeBar=start;
-   double extreme=StochMainBuffer[start];
-   double legStart=StochMainBuffer[start];
-
+   int start=total-2,dir=0,extBar=start; double ext=StochMainBuffer[start],legStart=StochMainBuffer[start];
    for(int i=start;i>=1;i--)
    {
-      double sv=StochMainBuffer[i];
-      double svPrev=StochMainBuffer[i+1];
-
-      if(ShouldLogBar(i))
-         PrintFormat("[DEBUG][MT5][StochLoop] i=%d sv=%.2f svPrev=%.2f dir=%d | chart=%I64d symbol=%s",i,sv,svPrev,dir,ChartID(),_Symbol);
-
-      if(dir==0)
-      {
-         legStart=svPrev;
-         extreme=svPrev;
-         extremeBar=i+1;
-
-         if(sv-legStart>=InpStochImpulse)
-         {
-            dir=1;
-            extreme=sv;
-            extremeBar=i;
-         }
-         else if(legStart-sv>=InpStochImpulse)
-         {
-            dir=-1;
-            extreme=sv;
-            extremeBar=i;
-         }
-      }
-      else if(dir==1)
-      {
-         if(sv>extreme)
-         {
-            extreme=sv;
-            extremeBar=i;
-         }
-
-         if(extreme-sv>=InpStochRetrace)
-         {
-            StochSwingHighBuffer[extremeBar]=extreme;
-            dir=-1;
-            legStart=extreme;
-            extreme=sv;
-            extremeBar=i;
-         }
-      }
-      else
-      {
-         if(sv<extreme)
-         {
-            extreme=sv;
-            extremeBar=i;
-         }
-
-         if(sv-extreme>=InpStochRetrace)
-         {
-            StochSwingLowBuffer[extremeBar]=extreme;
-            dir=1;
-            legStart=extreme;
-            extreme=sv;
-            extremeBar=i;
-         }
-      }
+      double sv=StochMainBuffer[i], sp=StochMainBuffer[i+1];
+      if(dir==0){legStart=sp;ext=sp;extBar=i+1;if(sv-legStart>=InpStochImpulse){dir=1;ext=sv;extBar=i;} else if(legStart-sv>=InpStochImpulse){dir=-1;ext=sv;extBar=i;}}
+      else if(dir==1){if(sv>ext){ext=sv;extBar=i;} if(ext-sv>=InpStochRetrace){StochSwingHighBuffer[extBar]=ext;dir=-1;legStart=ext;ext=sv;extBar=i;}}
+      else {if(sv<ext){ext=sv;extBar=i;} if(sv-ext>=InpStochRetrace){StochSwingLowBuffer[extBar]=ext;dir=1;legStart=ext;ext=sv;extBar=i;}}
    }
-
-   DebugPrint("[OnCalculate] After EvaluateStochasticStructure");
 }
 
-void CollectLatestSwings(const int rates_total,
-                         const double &highBuf[],
-                         const double &lowBuf[],
-                         int &bars[],
-                         double &vals[],
-                         int &types[])
+void CollectPoints(const int total,const double &highBuf[],const double &lowBuf[],int &bars[],double &vals[],int &types[])
 {
-   ArrayResize(bars,0);
-   ArrayResize(vals,0);
-   ArrayResize(types,0);
-
-   for(int i=rates_total-2; i>=1; i--)
+   ArrayResize(bars,0); ArrayResize(vals,0); ArrayResize(types,0);
+   for(int i=total-2;i>=1;i--)
    {
-      bool hasHigh=(highBuf[i]!=EMPTY_VALUE);
-      bool hasLow=(lowBuf[i]!=EMPTY_VALUE);
-      if(!hasHigh && !hasLow) continue;
-
-      int ns=ArraySize(bars)+1;
-      ArrayResize(bars,ns);
-      ArrayResize(vals,ns);
-      ArrayResize(types,ns);
-      bars[ns-1]=i;
-      if(hasHigh){vals[ns-1]=highBuf[i];types[ns-1]=1;}
-      else {vals[ns-1]=lowBuf[i];types[ns-1]=-1;}
+      bool h=(highBuf[i]!=EMPTY_VALUE), l=(lowBuf[i]!=EMPTY_VALUE); if(!h&&!l) continue;
+      int ns=ArraySize(bars)+1; ArrayResize(bars,ns); ArrayResize(vals,ns); ArrayResize(types,ns);
+      bars[ns-1]=i; vals[ns-1]=(h?highBuf[i]:lowBuf[i]); types[ns-1]=(h?1:-1);
    }
 }
 
-bool BuildLatestABC(const int &bars[],
-                    const double &vals[],
-                    const int &types[],
-                    int &aBar,
-                    int &bBar,
-                    int &cBar,
-                    double &aVal,
-                    double &bVal,
-                    double &cVal)
+bool NearestByBar(const int &bars[],const double &vals[],int target,int maxGap,int &outBar,double &outVal)
 {
-   int count=ArraySize(bars);
-   if(count<3) return(false);
+   int best=-1,bg=100000;
+   for(int i=0;i<ArraySize(bars);i++){int g=MathAbs(bars[i]-target); if(g<bg && g<=maxGap){bg=g; best=i;}}
+   if(best<0) return(false); outBar=bars[best]; outVal=vals[best]; return(true);
+}
 
-   for(int i=count-1;i>=2;i--)
+void ClearDivObjects(){ string n[]={"P1","P2","S1","S2","LA","LB","LC","SA","SB","SC","NAME"}; for(int i=0;i<ArraySize(n);i++) ObjectDelete(0,PREFIX+n[i]); }
+void DrawTrend(string n,int w,datetime t1,double p1,datetime t2,double p2,color c){ObjectDelete(0,n);ObjectCreate(0,n,OBJ_TREND,w,t1,p1,t2,p2);ObjectSetInteger(0,n,OBJPROP_COLOR,c);ObjectSetInteger(0,n,OBJPROP_WIDTH,2);ObjectSetInteger(0,n,OBJPROP_RAY_RIGHT,false);} 
+void DrawTxt(string n,int w,datetime t,double p,string txt,color c){ObjectDelete(0,n);ObjectCreate(0,n,OBJ_TEXT,w,t,p);ObjectSetString(0,n,OBJPROP_TEXT,txt);ObjectSetInteger(0,n,OBJPROP_COLOR,c);ObjectSetInteger(0,n,OBJPROP_FONTSIZE,9);} 
+
+void AlertDivergence(string code,bool bull,string trig,datetime barTime)
+{
+   if(!InpEnableAlerts) return;
+   string key=_Symbol+"|"+TfStr()+"|"+code+"|"+TimeToString(barTime,TIME_DATE|TIME_MINUTES);
+   if(key==gLastAlertKey || gLastAlertWhen==barTime) return;
+   string msg=StringFormat("%s %s %s %s trigger=%s",_Symbol,TfStr(),code,(bull?"BULLISH":"BEARISH"),trig);
+   Alert(msg); PrintFormat("[ALERT][MT5] %s",msg); gLastAlertKey=key; gLastAlertWhen=barTime;
+}
+
+bool DetectAndRender(const int total,const datetime &time[],const double &high[],const double &low[])
+{
+   int pBars[],pTypes[],sBars[],sTypes[]; double pVals[],sVals[];
+   CollectPoints(total,PriceSwingHighState,PriceSwingLowState,pBars,pVals,pTypes);
+   CollectPoints(total,StochSwingHighBuffer,StochSwingLowBuffer,sBars,sVals,sTypes);
+
+   int phB[],plB[],shB[],slB[]; double phV[],plV[],shV[],slV[];
+   ArrayResize(phB,0);ArrayResize(plB,0);ArrayResize(shB,0);ArrayResize(slB,0);
+   ArrayResize(phV,0);ArrayResize(plV,0);ArrayResize(shV,0);ArrayResize(slV,0);
+   for(int i=0;i<ArraySize(pBars);i++) if(pTypes[i]==1){int n=ArraySize(phB)+1;ArrayResize(phB,n);ArrayResize(phV,n);phB[n-1]=pBars[i];phV[n-1]=pVals[i];} else {int n2=ArraySize(plB)+1;ArrayResize(plB,n2);ArrayResize(plV,n2);plB[n2-1]=pBars[i];plV[n2-1]=pVals[i];}
+   for(int i=0;i<ArraySize(sBars);i++) if(sTypes[i]==1){int n=ArraySize(shB)+1;ArrayResize(shB,n);ArrayResize(shV,n);shB[n-1]=sBars[i];shV[n-1]=sVals[i];} else {int n2=ArraySize(slB)+1;ArrayResize(slB,n2);ArrayResize(slV,n2);slB[n2-1]=sBars[i];slV[n2-1]=sVals[i];}
+   if(ArraySize(phB)<2 || ArraySize(plB)<2 || ArraySize(shB)<2 || ArraySize(slB)<2){ClearDivObjects();return(false);}   
+
+   double atr=ATRBuffer[1]; if(atr<=0) atr=_Point*100; double eqTol=atr*InpEqualAtrMult, sweepTol=atr*InpSweepAtrMult, zoneTol=atr*InpZoneAtrMult;
+   string code="",name="",trigger="B"; bool bull=false,is3=false;
+   int pA=-1,pB=-1,pC=-1,sA=-1,sB=-1,sC=-1; double pvA=0,pvB=0,pvC=0,svA=0,svB=0,svC=0;
+
+   if(ArraySize(phB)>=3)
    {
-      int iA=i-2,iB=i-1,iC=i;
-      if(types[iA]==types[iB] || types[iB]==types[iC]) continue;
-      aBar=bars[iA]; bBar=bars[iB]; cBar=bars[iC];
-      aVal=vals[iA]; bVal=vals[iB]; cVal=vals[iC];
-      return(true);
+      int n=ArraySize(phB); pA=phB[n-3];pB=phB[n-2];pC=phB[n-1]; pvA=phV[n-3];pvB=phV[n-2];pvC=phV[n-1];
+      bool ga=NearestByBar(shB,shV,pA,InpABCMaxBarGap,sA,svA), gb=NearestByBar(shB,shV,pB,InpABCMaxBarGap,sB,svB), gc=NearestByBar(shB,shV,pC,InpABCMaxBarGap,sC,svC);
+      if(ga&&gb&&gc){ bool sweep=(MathAbs(pvA-pvB)<=eqTol && pvC>MathMax(pvA,pvB)+sweepTol && svC<MathMax(svA,svB)); bool normal=(pvC>pvA+sweepTol && svC<svA); if(sweep){code="A1";name="A1 BSL SWEEP 3D BEARISH";bull=false;is3=true;trigger="C";} else if(normal){code="E1";name="E1 3D NORMAL BEARISH";bull=false;is3=true;trigger="C";}}
    }
-   return(false);
-}
+   if(code=="" && ArraySize(plB)>=3)
+   {
+      int n=ArraySize(plB); pA=plB[n-3];pB=plB[n-2];pC=plB[n-1]; pvA=plV[n-3];pvB=plV[n-2];pvC=plV[n-1];
+      bool ga=NearestByBar(slB,slV,pA,InpABCMaxBarGap,sA,svA), gb=NearestByBar(slB,slV,pB,InpABCMaxBarGap,sB,svB), gc=NearestByBar(slB,slV,pC,InpABCMaxBarGap,sC,svC);
+      if(ga&&gb&&gc){ bool sweep=(MathAbs(pvA-pvB)<=eqTol && pvC<MathMin(pvA,pvB)-sweepTol && svC>MathMin(svA,svB)); bool normal=(pvC<pvA-sweepTol && svC>svA); if(sweep){code="A2";name="A2 SSL SWEEP 3D BULLISH";bull=true;is3=true;trigger="C";} else if(normal){code="E2";name="E2 3D NORMAL BULLISH";bull=true;is3=true;trigger="C";}}
+   }
+   if(code=="" && ArraySize(phB)>=2)
+   {
+      int n=ArraySize(phB); pA=phB[n-2];pB=phB[n-1]; pvA=phV[n-2];pvB=phV[n-1]; pC=-1;
+      bool ga=NearestByBar(shB,shV,pA,InpABCMaxBarGap,sA,svA), gb=NearestByBar(shB,shV,pB,InpABCMaxBarGap,sB,svB);
+      if(ga&&gb && pvB>pvA+sweepTol && svB<svA){ if(MathAbs(pvA-pvB)<=eqTol+sweepTol){code="A3";name="A3 BSL SWEEP 2D BEARISH";} else {code="D1";name="D1 2D NORMAL BEARISH";} bull=false;is3=false;trigger="B"; if(InpEnableB1B2&&InpOrderblockHigh>0&&MathAbs(pvB-InpOrderblockHigh)<=zoneTol){code="B1";name="B1 OB RETURN 2D BEARISH";} if(InpEnableC1C2&&InpSupplyZone>0&&MathAbs(pvB-InpSupplyZone)<=zoneTol){code="C1";name="C1 SUPPLY RETURN 2D BEARISH";} }
+   }
+   if(code=="" && ArraySize(plB)>=2)
+   {
+      int n=ArraySize(plB); pA=plB[n-2];pB=plB[n-1]; pvA=plV[n-2];pvB=plV[n-1]; pC=-1;
+      bool ga=NearestByBar(slB,slV,pA,InpABCMaxBarGap,sA,svA), gb=NearestByBar(slB,slV,pB,InpABCMaxBarGap,sB,svB);
+      if(ga&&gb && pvB<pvA-sweepTol && svB>svA){ if(MathAbs(pvA-pvB)<=eqTol+sweepTol){code="A4";name="A4 SSL SWEEP 2D BULLISH";} else {code="D2";name="D2 2D NORMAL BULLISH";} bull=true;is3=false;trigger="B"; if(InpEnableB1B2&&InpOrderblockLow>0&&MathAbs(pvB-InpOrderblockLow)<=zoneTol){code="B2";name="B2 OB RETURN 2D BULLISH";} if(InpEnableC1C2&&InpDemandZone>0&&MathAbs(pvB-InpDemandZone)<=zoneTol){code="C2";name="C2 DEMAND RETURN 2D BULLISH";} }
+   }
 
-bool IsAlignedABC(const int pA,const int pB,const int pC,
-                  const int sA,const int sB,const int sC)
-{
-   return(MathAbs(pA-sA)<=InpABCMaxBarGap &&
-          MathAbs(pB-sB)<=InpABCMaxBarGap &&
-          MathAbs(pC-sC)<=InpABCMaxBarGap);
-}
-
-void DeleteStage2Objects()
-{
-   string keys[] = {"P_AB","P_BC","P_A","P_B","P_C","S_AB","S_BC","S_A","S_B","S_C"};
-   for(int i=0;i<ArraySize(keys);i++)
-      ObjectDelete(0,ST2_PREFIX+keys[i]);
-}
-
-void DrawABCSegment(const string name,
-                    const int window,
-                    const datetime t1,
-                    const double v1,
-                    const datetime t2,
-                    const double v2,
-                    const color clr)
-{
-   ObjectDelete(0,name);
-   ObjectCreate(0,name,OBJ_TREND,window,t1,v1,t2,v2);
-   ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
-   ObjectSetInteger(0,name,OBJPROP_WIDTH,2);
-   ObjectSetInteger(0,name,OBJPROP_RAY_RIGHT,false);
-}
-
-void DrawABCText(const string name,
-                 const int window,
-                 const datetime t,
-                 const double v,
-                 const string txt,
-                 const color clr)
-{
-   ObjectDelete(0,name);
-   ObjectCreate(0,name,OBJ_TEXT,window,t,v);
-   ObjectSetString(0,name,OBJPROP_TEXT,txt);
-   ObjectSetInteger(0,name,OBJPROP_COLOR,clr);
-   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,9);
-}
-
-void RenderABC(const datetime &time[],
-               const int pA,const int pB,const int pC,
-               const double pAv,const double pBv,const double pCv,
-               const int sA,const int sB,const int sC,
-               const double sAv,const double sBv,const double sCv)
-{
-   DebugPrint("[OnCalculate] Before RenderABC");
-   DeleteStage2Objects();
-
-   DrawABCSegment(ST2_PREFIX+"P_AB",0,time[pA],pAv,time[pB],pBv,clrDodgerBlue);
-   DrawABCSegment(ST2_PREFIX+"P_BC",0,time[pB],pBv,time[pC],pCv,clrDodgerBlue);
-   DrawABCText(ST2_PREFIX+"P_A",0,time[pA],pAv,"A",clrDodgerBlue);
-   DrawABCText(ST2_PREFIX+"P_B",0,time[pB],pBv,"B",clrDodgerBlue);
-   DrawABCText(ST2_PREFIX+"P_C",0,time[pC],pCv,"C",clrDodgerBlue);
-
-   DrawABCSegment(ST2_PREFIX+"S_AB",1,time[sA],sAv,time[sB],sBv,clrGold);
-   DrawABCSegment(ST2_PREFIX+"S_BC",1,time[sB],sBv,time[sC],sCv,clrGold);
-   DrawABCText(ST2_PREFIX+"S_A",1,time[sA],sAv,"A",clrGold);
-   DrawABCText(ST2_PREFIX+"S_B",1,time[sB],sBv,"B",clrGold);
-   DrawABCText(ST2_PREFIX+"S_C",1,time[sC],sCv,"C",clrGold);
-
-   DebugPrint("[OnCalculate] After RenderABC");
-}
-
-void RedrawPriceSwingObjects(const int rates_total)
-{
-   DebugPrint("[OnCalculate] Before RedrawPriceSwingObjects");
+   if(code==""){ ClearDivObjects(); return(false); }
+   int comp=(trigger=="C"?pC:pB);
+   ClearDivObjects();
+   DrawTrend(PREFIX+"P1",0,time[pA],pvA,time[(trigger=="C"?pC:pB)],(trigger=="C"?pvC:pvB),bull?clrLime:clrRed);
+   DrawTrend(PREFIX+"S1",1,time[sA],svA,time[(trigger=="C"?sC:sB)],(trigger=="C"?svC:svB),bull?clrLime:clrRed);
+   DrawTxt(PREFIX+"LA",0,time[pA],pvA,"A",clrWhite); DrawTxt(PREFIX+"LB",0,time[pB],pvB,"B",clrWhite);
+   DrawTxt(PREFIX+"SA",1,time[sA],svA,"A",clrWhite); DrawTxt(PREFIX+"SB",1,time[sB],svB,"B",clrWhite);
+   if(is3){ DrawTrend(PREFIX+"P2",0,time[pB],pvB,time[pC],pvC,bull?clrLime:clrRed); DrawTrend(PREFIX+"S2",1,time[sB],svB,time[sC],svC,bull?clrLime:clrRed); DrawTxt(PREFIX+"LC",0,time[pC],pvC,"C",clrWhite); DrawTxt(PREFIX+"SC",1,time[sC],svC,"C",clrWhite);}   
+   DrawTxt(PREFIX+"NAME",0,time[comp],(bull?low[comp]:high[comp]),name,bull?clrLime:clrRed);
+   if(comp==1) AlertDivergence(code,bull,trigger,time[1]);
+   return(true);
 }
 
 int OnInit()
 {
-   DebugPrint("[OnInit] Start OnInit");
-
-   IndicatorSetString(INDICATOR_SHORTNAME,"Professional Structural Stoch Divergence - Stage2 (MT5)");
-
-   SetIndexBuffer(0,StochMainBuffer,INDICATOR_DATA);
-   SetIndexBuffer(1,StochSignalBuffer,INDICATOR_DATA);
-   SetIndexBuffer(2,StochSwingHighBuffer,INDICATOR_DATA);
-   SetIndexBuffer(3,StochSwingLowBuffer,INDICATOR_DATA);
-   SetIndexBuffer(4,PriceSwingHighState,INDICATOR_CALCULATIONS);
-   SetIndexBuffer(5,PriceSwingLowState,INDICATOR_CALCULATIONS);
-
-   PlotIndexSetInteger(2,PLOT_ARROW,159);
-   PlotIndexSetInteger(3,PLOT_ARROW,159);
-   PlotIndexSetDouble(2,PLOT_EMPTY_VALUE,EMPTY_VALUE);
-   PlotIndexSetDouble(3,PLOT_EMPTY_VALUE,EMPTY_VALUE);
-
-   ArraySetAsSeries(StochMainBuffer,true);
-   ArraySetAsSeries(StochSignalBuffer,true);
-   ArraySetAsSeries(StochSwingHighBuffer,true);
-   ArraySetAsSeries(StochSwingLowBuffer,true);
-   ArraySetAsSeries(PriceSwingHighState,true);
-   ArraySetAsSeries(PriceSwingLowState,true);
-   ArraySetAsSeries(ATRBuffer,true);
-   ArraySetAsSeries(EMAFastBuffer,true);
-   ArraySetAsSeries(EMASlowBuffer,true);
-
-   atrHandle=iATR(_Symbol,_Period,InpATRPeriod);
-   emaFastHandle=iMA(_Symbol,_Period,InpFastEMA,0,MODE_EMA,PRICE_CLOSE);
-   emaSlowHandle=iMA(_Symbol,_Period,InpSlowEMA,0,MODE_EMA,PRICE_CLOSE);
-   stochHandle=iStochastic(_Symbol,_Period,InpKPeriod,InpDPeriod,InpSlowing,MODE_SMA,STO_LOWHIGH);
-
-   PrintFormat("[DEBUG][MT5][OnInit] handles atr=%d emaFast=%d emaSlow=%d stoch=%d chart=%I64d symbol=%s",atrHandle,emaFastHandle,emaSlowHandle,stochHandle,ChartID(),_Symbol);
-
-   if(atrHandle==INVALID_HANDLE || emaFastHandle==INVALID_HANDLE || emaSlowHandle==INVALID_HANDLE || stochHandle==INVALID_HANDLE)
-   {
-      PrintFormat("[DEBUG][MT5][OnInit] INIT_FAILED due to invalid handle(s). chart=%I64d symbol=%s",ChartID(),_Symbol);
-      return(INIT_FAILED);
-   }
-
-   DebugPrint("[OnInit] After setting indicator buffers");
+   Dbg("[OnInit] Start");
+   IndicatorSetString(INDICATOR_SHORTNAME,"Professional Structural Stoch Divergence - Stage2+3 (MT5)");
+   SetIndexBuffer(0,StochMainBuffer,INDICATOR_DATA); SetIndexBuffer(1,StochSignalBuffer,INDICATOR_DATA); SetIndexBuffer(2,StochSwingHighBuffer,INDICATOR_DATA); SetIndexBuffer(3,StochSwingLowBuffer,INDICATOR_DATA); SetIndexBuffer(4,PriceSwingHighState,INDICATOR_CALCULATIONS); SetIndexBuffer(5,PriceSwingLowState,INDICATOR_CALCULATIONS);
+   PlotIndexSetInteger(2,PLOT_ARROW,159); PlotIndexSetInteger(3,PLOT_ARROW,159); PlotIndexSetDouble(2,PLOT_EMPTY_VALUE,EMPTY_VALUE); PlotIndexSetDouble(3,PLOT_EMPTY_VALUE,EMPTY_VALUE);
+   ArraySetAsSeries(StochMainBuffer,true); ArraySetAsSeries(StochSignalBuffer,true); ArraySetAsSeries(StochSwingHighBuffer,true); ArraySetAsSeries(StochSwingLowBuffer,true); ArraySetAsSeries(PriceSwingHighState,true); ArraySetAsSeries(PriceSwingLowState,true); ArraySetAsSeries(ATRBuffer,true); ArraySetAsSeries(EMAFastBuffer,true); ArraySetAsSeries(EMASlowBuffer,true);
+   atrHandle=iATR(_Symbol,_Period,InpATRPeriod); emaFastHandle=iMA(_Symbol,_Period,InpFastEMA,0,MODE_EMA,PRICE_CLOSE); emaSlowHandle=iMA(_Symbol,_Period,InpSlowEMA,0,MODE_EMA,PRICE_CLOSE); stochHandle=iStochastic(_Symbol,_Period,InpKPeriod,InpDPeriod,InpSlowing,MODE_SMA,STO_LOWHIGH);
+   if(atrHandle==INVALID_HANDLE || emaFastHandle==INVALID_HANDLE || emaSlowHandle==INVALID_HANDLE || stochHandle==INVALID_HANDLE) return(INIT_FAILED);
    return(INIT_SUCCEEDED);
 }
 
-void OnDeinit(const int reason)
-{
-   if(atrHandle!=INVALID_HANDLE) IndicatorRelease(atrHandle);
-   if(emaFastHandle!=INVALID_HANDLE) IndicatorRelease(emaFastHandle);
-   if(emaSlowHandle!=INVALID_HANDLE) IndicatorRelease(emaSlowHandle);
-   if(stochHandle!=INVALID_HANDLE) IndicatorRelease(stochHandle);
-   DeleteStage2Objects();
-}
+void OnDeinit(const int reason){ if(atrHandle!=INVALID_HANDLE) IndicatorRelease(atrHandle); if(emaFastHandle!=INVALID_HANDLE) IndicatorRelease(emaFastHandle); if(emaSlowHandle!=INVALID_HANDLE) IndicatorRelease(emaSlowHandle); if(stochHandle!=INVALID_HANDLE) IndicatorRelease(stochHandle); ClearDivObjects(); }
 
-int OnCalculate(const int rates_total,
-                const int prev_calculated,
-                const datetime &time[],
-                const double &open[],
-                const double &high[],
-                const double &low[],
-                const double &close[],
-                const long &tick_volume[],
-                const long &volume[],
-                const int &spread[])
+int OnCalculate(const int rates_total,const int prev_calculated,const datetime &time[],const double &open[],const double &high[],const double &low[],const double &close[],const long &tick_volume[],const long &volume[],const int &spread[])
 {
-   PrintFormat("[DEBUG][MT5][OnCalculate] Start rates_total=%d prev_calculated=%d chart=%I64d symbol=%s",rates_total,prev_calculated,ChartID(),_Symbol);
-
    int minBars=MathMax(MathMax(InpSlowEMA,InpATRPeriod),InpKPeriod+InpDPeriod+InpSlowing)+20;
-   if(rates_total < minBars)
-   {
-      PrintFormat("[DEBUG][MT5][OnCalculate] Early exit: rates_total=%d < minBars=%d chart=%I64d symbol=%s",rates_total,minBars,ChartID(),_Symbol);
-      return(0);
-   }
+   if(rates_total<minBars) return(0);
 
-   ArrayResize(ATRBuffer,rates_total);
-   ArrayResize(EMAFastBuffer,rates_total);
-   ArrayResize(EMASlowBuffer,rates_total);
-
-   int cAtr=CopyBuffer(atrHandle,0,0,rates_total,ATRBuffer);
-   int cFast=CopyBuffer(emaFastHandle,0,0,rates_total,EMAFastBuffer);
-   int cSlow=CopyBuffer(emaSlowHandle,0,0,rates_total,EMASlowBuffer);
-   int cStMain=CopyBuffer(stochHandle,0,0,rates_total,StochMainBuffer);
-   int cStSig=CopyBuffer(stochHandle,1,0,rates_total,StochSignalBuffer);
-
-   PrintFormat("[DEBUG][MT5][OnCalculate] After CopyBuffer cAtr=%d cFast=%d cSlow=%d cStMain=%d cStSig=%d chart=%I64d symbol=%s",cAtr,cFast,cSlow,cStMain,cStSig,ChartID(),_Symbol);
-
-   if(cAtr<rates_total || cFast<rates_total || cSlow<rates_total || cStMain<rates_total || cStSig<rates_total)
-   {
-      PrintFormat("[DEBUG][MT5][OnCalculate] CopyBuffer failure/partial copy. rates_total=%d chart=%I64d symbol=%s",rates_total,ChartID(),_Symbol);
-      return(prev_calculated);
-   }
+   ArrayResize(ATRBuffer,rates_total); ArrayResize(EMAFastBuffer,rates_total); ArrayResize(EMASlowBuffer,rates_total);
+   int cAtr=CopyBuffer(atrHandle,0,0,rates_total,ATRBuffer), cFast=CopyBuffer(emaFastHandle,0,0,rates_total,EMAFastBuffer), cSlow=CopyBuffer(emaSlowHandle,0,0,rates_total,EMASlowBuffer), cMain=CopyBuffer(stochHandle,0,0,rates_total,StochMainBuffer), cSig=CopyBuffer(stochHandle,1,0,rates_total,StochSignalBuffer);
+   if(cAtr<rates_total || cFast<rates_total || cSlow<rates_total || cMain<rates_total || cSig<rates_total) return(prev_calculated);
 
    ResetWorkingBuffers(rates_total);
    EvaluatePriceStructure(rates_total,high,low,close);
-   EvaluateStochasticStructure(rates_total);
+   EvaluateStochStructure(rates_total);
+   DetectAndRender(rates_total,time,high,low);
 
-   int pBars[]; double pVals[]; int pTypes[];
-   int sBars[]; double sVals[]; int sTypes[];
-   CollectLatestSwings(rates_total,PriceSwingHighState,PriceSwingLowState,pBars,pVals,pTypes);
-   CollectLatestSwings(rates_total,StochSwingHighBuffer,StochSwingLowBuffer,sBars,sVals,sTypes);
-
-   int pA,pB,pC,sA,sB,sC;
-   double pAv,pBv,pCv,sAv,sBv,sCv;
-   bool pOk=BuildLatestABC(pBars,pVals,pTypes,pA,pB,pC,pAv,pBv,pCv);
-   bool sOk=BuildLatestABC(sBars,sVals,sTypes,sA,sB,sC,sAv,sBv,sCv);
-
-   if(pOk && sOk && IsAlignedABC(pA,pB,pC,sA,sB,sC))
-   {
-      PrintFormat("[DEBUG][MT5][Stage2] ABC aligned p=(%d,%d,%d) s=(%d,%d,%d) chart=%I64d symbol=%s",pA,pB,pC,sA,sB,sC,ChartID(),_Symbol);
-      RenderABC(time,pA,pB,pC,pAv,pBv,pCv,sA,sB,sC,sAv,sBv,sCv);
-   }
-   else
-   {
-      DebugPrint("[OnCalculate] ABC not ready or not aligned; clearing Stage2 objects");
-      DeleteStage2Objects();
-   }
-
-   RedrawPriceSwingObjects(rates_total);
-   PrintFormat("[DEBUG][MT5][OnCalculate] End return=%d chart=%I64d symbol=%s",rates_total,ChartID(),_Symbol);
    return(rates_total);
 }
