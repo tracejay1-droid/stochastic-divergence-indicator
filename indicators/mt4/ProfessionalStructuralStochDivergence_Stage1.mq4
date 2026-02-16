@@ -23,6 +23,7 @@ input double InpEMASepATRMult      = 0.10;
 input double InpEMASlopeATRMult    = 0.05;
 input double InpStochImpulse       = 18.0;
 input double InpStochRetrace       = 10.0;
+input int    InpABCMaxBarGap       = 8;
 input bool   InpDebugLogs          = true;
 input int    InpDebugBarStep       = 50;
 
@@ -30,8 +31,10 @@ double StochMainBuffer[];
 double StochSignalBuffer[];
 double StochSwingHighBuffer[];
 double StochSwingLowBuffer[];
-double PriceSwingHighState[]; // internal state buffers
+double PriceSwingHighState[];
 double PriceSwingLowState[];
+
+string ST2_PREFIX = "PSD_STAGE2_MT4_";
 
 void DebugPrint(string msg)
 {
@@ -230,11 +233,146 @@ void EvaluateStochasticStructure(const int rates_total)
    DebugPrint("[OnCalculate] After EvaluateStochasticStructure");
 }
 
+void CollectLatestSwings(const int rates_total,
+                         const double &highBuf[],
+                         const double &lowBuf[],
+                         int &bars[],
+                         double &vals[],
+                         int &types[])
+{
+   ArrayResize(bars,0);
+   ArrayResize(vals,0);
+   ArrayResize(types,0);
+
+   for(int i=rates_total-2; i>=1; i--)
+   {
+      bool hasHigh = (highBuf[i] != EMPTY_VALUE);
+      bool hasLow  = (lowBuf[i] != EMPTY_VALUE);
+      if(!hasHigh && !hasLow) continue;
+
+      int newSize = ArraySize(bars)+1;
+      ArrayResize(bars,newSize);
+      ArrayResize(vals,newSize);
+      ArrayResize(types,newSize);
+
+      bars[newSize-1] = i;
+      if(hasHigh)
+      {
+         vals[newSize-1] = highBuf[i];
+         types[newSize-1] = 1;
+      }
+      else
+      {
+         vals[newSize-1] = lowBuf[i];
+         types[newSize-1] = -1;
+      }
+   }
+}
+
+bool BuildLatestABC(const int &bars[],
+                    const double &vals[],
+                    const int &types[],
+                    int &aBar,
+                    int &bBar,
+                    int &cBar,
+                    double &aVal,
+                    double &bVal,
+                    double &cVal)
+{
+   int count=ArraySize(bars);
+   if(count<3) return(false);
+
+   for(int i=count-1; i>=2; i--)
+   {
+      int iA=i-2;
+      int iB=i-1;
+      int iC=i;
+      if(types[iA]==types[iB] || types[iB]==types[iC])
+         continue;
+
+      aBar=bars[iA]; bBar=bars[iB]; cBar=bars[iC];
+      aVal=vals[iA]; bVal=vals[iB]; cVal=vals[iC];
+      return(true);
+   }
+   return(false);
+}
+
+bool IsAlignedABC(const int pA,const int pB,const int pC,
+                  const int sA,const int sB,const int sC)
+{
+   return(MathAbs(pA-sA)<=InpABCMaxBarGap &&
+          MathAbs(pB-sB)<=InpABCMaxBarGap &&
+          MathAbs(pC-sC)<=InpABCMaxBarGap);
+}
+
+void DeleteStage2Objects()
+{
+   string keys[] = {
+      "P_AB","P_BC","P_A","P_B","P_C",
+      "S_AB","S_BC","S_A","S_B","S_C"
+   };
+   for(int i=0;i<ArraySize(keys);i++)
+      ObjectDelete(ST2_PREFIX+keys[i]);
+}
+
+void DrawABCSegment(const string name,
+                    const int window,
+                    const datetime t1,
+                    const double v1,
+                    const datetime t2,
+                    const double v2,
+                    const color clr)
+{
+   ObjectDelete(name);
+   ObjectCreate(name,OBJ_TREND,window,t1,v1,t2,v2);
+   ObjectSet(name,OBJPROP_COLOR,clr);
+   ObjectSet(name,OBJPROP_WIDTH,2);
+   ObjectSet(name,OBJPROP_RAY,false);
+}
+
+void DrawABCText(const string name,
+                 const int window,
+                 const datetime t,
+                 const double v,
+                 const string text,
+                 const color clr)
+{
+   ObjectDelete(name);
+   ObjectCreate(name,OBJ_TEXT,window,t,v);
+   ObjectSetText(name,text,9,"Arial",clr);
+}
+
+void RenderABC(const datetime &time[],
+               const int pA,const int pB,const int pC,
+               const double pAv,const double pBv,const double pCv,
+               const int sA,const int sB,const int sC,
+               const double sAv,const double sBv,const double sCv)
+{
+   DebugPrint("[OnCalculate] Before RenderABC");
+   DeleteStage2Objects();
+
+   // Price ABC in main chart window
+   DrawABCSegment(ST2_PREFIX+"P_AB",0,time[pA],pAv,time[pB],pBv,clrDodgerBlue);
+   DrawABCSegment(ST2_PREFIX+"P_BC",0,time[pB],pBv,time[pC],pCv,clrDodgerBlue);
+   DrawABCText(ST2_PREFIX+"P_A",0,time[pA],pAv,"A",clrDodgerBlue);
+   DrawABCText(ST2_PREFIX+"P_B",0,time[pB],pBv,"B",clrDodgerBlue);
+   DrawABCText(ST2_PREFIX+"P_C",0,time[pC],pCv,"C",clrDodgerBlue);
+
+   // Stochastic ABC in indicator subwindow
+   DrawABCSegment(ST2_PREFIX+"S_AB",1,time[sA],sAv,time[sB],sBv,clrGold);
+   DrawABCSegment(ST2_PREFIX+"S_BC",1,time[sB],sBv,time[sC],sCv,clrGold);
+   DrawABCText(ST2_PREFIX+"S_A",1,time[sA],sAv,"A",clrGold);
+   DrawABCText(ST2_PREFIX+"S_B",1,time[sB],sBv,"B",clrGold);
+   DrawABCText(ST2_PREFIX+"S_C",1,time[sC],sCv,"C",clrGold);
+
+   DebugPrint("[OnCalculate] After RenderABC");
+}
+
 int OnInit()
 {
    DebugPrint("[OnInit] Start OnInit");
 
-   IndicatorShortName("Professional Structural Stoch Divergence - Stage1 (MT4)");
+   IndicatorShortName("Professional Structural Stoch Divergence - Stage2 (MT4)");
 
    SetIndexBuffer(0,StochMainBuffer);
    SetIndexStyle(0,DRAW_LINE,STYLE_SOLID,1,clrDeepSkyBlue);
@@ -267,6 +405,12 @@ int OnInit()
    return(INIT_SUCCEEDED);
 }
 
+
+void OnDeinit(const int reason)
+{
+   DeleteStage2Objects();
+}
+
 int OnCalculate(const int rates_total,
                 const int prev_calculated,
                 const datetime &time[],
@@ -296,6 +440,27 @@ int OnCalculate(const int rates_total,
    ResetWorkingBuffers(rates_total);
    EvaluatePriceStructure(rates_total,high,low,close);
    EvaluateStochasticStructure(rates_total);
+
+   int pBars[]; double pVals[]; int pTypes[];
+   int sBars[]; double sVals[]; int sTypes[];
+   CollectLatestSwings(rates_total,PriceSwingHighState,PriceSwingLowState,pBars,pVals,pTypes);
+   CollectLatestSwings(rates_total,StochSwingHighBuffer,StochSwingLowBuffer,sBars,sVals,sTypes);
+
+   int pA,pB,pC,sA,sB,sC;
+   double pAv,pBv,pCv,sAv,sBv,sCv;
+   bool pOk=BuildLatestABC(pBars,pVals,pTypes,pA,pB,pC,pAv,pBv,pCv);
+   bool sOk=BuildLatestABC(sBars,sVals,sTypes,sA,sB,sC,sAv,sBv,sCv);
+
+   if(pOk && sOk && IsAlignedABC(pA,pB,pC,sA,sB,sC))
+   {
+      PrintFormat("[DEBUG][MT4][Stage2] ABC aligned. p=(%d,%d,%d) s=(%d,%d,%d)",pA,pB,pC,sA,sB,sC);
+      RenderABC(time,pA,pB,pC,pAv,pBv,pCv,sA,sB,sC,sAv,sBv,sCv);
+   }
+   else
+   {
+      DebugPrint("[OnCalculate] ABC not ready or not aligned; clearing Stage2 objects");
+      DeleteStage2Objects();
+   }
 
    PrintFormat("[DEBUG][MT4][OnCalculate] End return=%d",rates_total);
    return(rates_total);
