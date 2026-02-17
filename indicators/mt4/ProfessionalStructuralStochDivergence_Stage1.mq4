@@ -199,6 +199,7 @@ void OnDeinit(const int reason){ ClearDivObjects(); }
 
 int OnCalculate(const int rates_total,const int prev_calculated,const datetime &time[],const double &open[],const double &high[],const double &low[],const double &close[],const long &tick_volume[],const long &volume[],const int &spread[])
 {
+   if(rates_total<=0) return(prev_calculated);
    if(InpDebugLogs && gLastStatsBar!=time[0]) Dbg("OnCalculate entry rates_total="+IntegerToString(rates_total)+" prev="+IntegerToString(prev_calculated));
    int minBars=MathMax(MathMax(InpSlowEMA,InpATRPeriod),InpKPeriod+InpDPeriod+InpSlowing)+20;
    if(rates_total<minBars) return(prev_calculated);

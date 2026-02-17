@@ -223,6 +223,7 @@ void OnDeinit(const int reason){ if(atrHandle!=INVALID_HANDLE) IndicatorRelease(
 
 int OnCalculate(const int rates_total,const int prev_calculated,const datetime &time[],const double &open[],const double &high[],const double &low[],const double &close[],const long &tick_volume[],const long &volume[],const int &spread[])
 {
+   if(rates_total<=0) return(prev_calculated);
    if(InpDebugLogs && (gLastStatsBar!=time[0])) Dbg(StringFormat("OnCalculate entry rates_total=%d prev=%d",rates_total,prev_calculated));
 
    int minBars=MathMax(MathMax(InpSlowEMA,InpATRPeriod),InpKPeriod+InpDPeriod+InpSlowing)+20;
