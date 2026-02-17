@@ -43,6 +43,7 @@ input double InpDemandZone         = 0.0;
 input double InpZoneAtrMult        = 0.30;
 input bool   InpEnableAlerts       = true;
 input bool   InpDebugLogs          = true;
+input bool   InpSafeMode           = true;
 
 double StochMainBuffer[];
 double StochSignalBuffer[];
@@ -243,7 +244,10 @@ int OnCalculate(const int rates_total,const int prev_calculated,const datetime &
    int pH=0,pL=0,sH=0,sL=0;
    for(int i=1;i<rates_total-1;i++){ if(PriceSwingHighState[i]!=EMPTY_VALUE)pH++; if(PriceSwingLowState[i]!=EMPTY_VALUE)pL++; if(StochSwingHighBuffer[i]!=EMPTY_VALUE)sH++; if(StochSwingLowBuffer[i]!=EMPTY_VALUE)sL++; }
    int candidates=0,confirmed=0;
-   DetectAndRender(rates_total,time,high,low,candidates,confirmed,pH,pL,sH,sL);
+   if(!InpSafeMode && rates_total>minBars+30)
+      DetectAndRender(rates_total,time,high,low,candidates,confirmed,pH,pL,sH,sL);
+   else if(InpDebugLogs && gLastStatsBar!=time[0])
+      Dbg("SafeMode active or not enough bars; divergence rendering skipped");
 
    if(InpDebugLogs && gLastStatsBar!=time[0])
    {
