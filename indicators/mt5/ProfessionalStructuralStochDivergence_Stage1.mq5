@@ -196,6 +196,16 @@ bool DetectAndRender(const int total,const datetime &time[],const double &high[]
    return(true);
 }
 
+
+bool EnsureHandles()
+{
+   if(atrHandle==INVALID_HANDLE) atrHandle=iATR(_Symbol,_Period,InpATRPeriod);
+   if(emaFastHandle==INVALID_HANDLE) emaFastHandle=iMA(_Symbol,_Period,InpFastEMA,0,MODE_EMA,PRICE_CLOSE);
+   if(emaSlowHandle==INVALID_HANDLE) emaSlowHandle=iMA(_Symbol,_Period,InpSlowEMA,0,MODE_EMA,PRICE_CLOSE);
+   if(stochHandle==INVALID_HANDLE) stochHandle=iStochastic(_Symbol,_Period,InpKPeriod,InpDPeriod,InpSlowing,MODE_SMA,STO_LOWHIGH);
+   return(atrHandle!=INVALID_HANDLE && emaFastHandle!=INVALID_HANDLE && emaSlowHandle!=INVALID_HANDLE && stochHandle!=INVALID_HANDLE);
+}
+
 int OnInit()
 {
    Dbg("OnInit entry");
@@ -203,9 +213,9 @@ int OnInit()
    SetIndexBuffer(0,StochMainBuffer,INDICATOR_DATA); SetIndexBuffer(1,StochSignalBuffer,INDICATOR_DATA); SetIndexBuffer(2,StochSwingHighBuffer,INDICATOR_DATA); SetIndexBuffer(3,StochSwingLowBuffer,INDICATOR_DATA); SetIndexBuffer(4,PriceSwingHighState,INDICATOR_CALCULATIONS); SetIndexBuffer(5,PriceSwingLowState,INDICATOR_CALCULATIONS);
    PlotIndexSetInteger(2,PLOT_ARROW,159); PlotIndexSetInteger(3,PLOT_ARROW,159); PlotIndexSetDouble(2,PLOT_EMPTY_VALUE,EMPTY_VALUE); PlotIndexSetDouble(3,PLOT_EMPTY_VALUE,EMPTY_VALUE);
    ArraySetAsSeries(StochMainBuffer,true); ArraySetAsSeries(StochSignalBuffer,true); ArraySetAsSeries(StochSwingHighBuffer,true); ArraySetAsSeries(StochSwingLowBuffer,true); ArraySetAsSeries(PriceSwingHighState,true); ArraySetAsSeries(PriceSwingLowState,true); ArraySetAsSeries(ATRBuffer,true); ArraySetAsSeries(EMAFastBuffer,true); ArraySetAsSeries(EMASlowBuffer,true);
-   atrHandle=iATR(_Symbol,_Period,InpATRPeriod); emaFastHandle=iMA(_Symbol,_Period,InpFastEMA,0,MODE_EMA,PRICE_CLOSE); emaSlowHandle=iMA(_Symbol,_Period,InpSlowEMA,0,MODE_EMA,PRICE_CLOSE); stochHandle=iStochastic(_Symbol,_Period,InpKPeriod,InpDPeriod,InpSlowing,MODE_SMA,STO_LOWHIGH);
+   EnsureHandles();
    Dbg(StringFormat("handles atr=%d emaFast=%d emaSlow=%d stoch=%d",atrHandle,emaFastHandle,emaSlowHandle,stochHandle));
-   if(atrHandle==INVALID_HANDLE || emaFastHandle==INVALID_HANDLE || emaSlowHandle==INVALID_HANDLE || stochHandle==INVALID_HANDLE) return(INIT_FAILED);
+   // Never hard-fail attach; retry handle init in OnCalculate if market data was not ready yet.
    return(INIT_SUCCEEDED);
 }
 
@@ -216,7 +226,9 @@ int OnCalculate(const int rates_total,const int prev_calculated,const datetime &
    if(InpDebugLogs && (gLastStatsBar!=time[0])) Dbg(StringFormat("OnCalculate entry rates_total=%d prev=%d",rates_total,prev_calculated));
 
    int minBars=MathMax(MathMax(InpSlowEMA,InpATRPeriod),InpKPeriod+InpDPeriod+InpSlowing)+20;
-   if(rates_total<minBars) return(0);
+   if(rates_total<minBars) return(prev_calculated);
+
+   if(!EnsureHandles()){ Dbg("handles not ready yet; waiting for data"); return(prev_calculated); }
 
    ArrayResize(ATRBuffer,rates_total); ArrayResize(EMAFastBuffer,rates_total); ArrayResize(EMASlowBuffer,rates_total);
    int cAtr=CopyBuffer(atrHandle,0,0,rates_total,ATRBuffer), cFast=CopyBuffer(emaFastHandle,0,0,rates_total,EMAFastBuffer), cSlow=CopyBuffer(emaSlowHandle,0,0,rates_total,EMASlowBuffer), cMain=CopyBuffer(stochHandle,0,0,rates_total,StochMainBuffer), cSig=CopyBuffer(stochHandle,1,0,rates_total,StochSignalBuffer);

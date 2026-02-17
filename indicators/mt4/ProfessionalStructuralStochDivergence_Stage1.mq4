@@ -201,7 +201,7 @@ int OnCalculate(const int rates_total,const int prev_calculated,const datetime &
 {
    if(InpDebugLogs && gLastStatsBar!=time[0]) Dbg("OnCalculate entry rates_total="+IntegerToString(rates_total)+" prev="+IntegerToString(prev_calculated));
    int minBars=MathMax(MathMax(InpSlowEMA,InpATRPeriod),InpKPeriod+InpDPeriod+InpSlowing)+20;
-   if(rates_total<minBars) return(0);
+   if(rates_total<minBars) return(prev_calculated);
 
    for(int i=0;i<rates_total;i++)
    {
