@@ -57,6 +57,7 @@ double EMASlowBuffer[];
 
 int atrHandle=INVALID_HANDLE, emaFastHandle=INVALID_HANDLE, emaSlowHandle=INVALID_HANDLE, stochHandle=INVALID_HANDLE;
 string PREFIX="PSD_DIV_MT5_";
+string IND_SHORTNAME="Professional Structural Stoch Divergence - Stage2+3 (MT5)";
 string gLastAlertKey="";
 datetime gLastAlertWhen=0;
 datetime gLastStatsBar=0;
@@ -66,8 +67,7 @@ string TfStr(){ return(EnumToString((ENUM_TIMEFRAMES)_Period)); }
 
 int GetSubwindow()
 {
-   string sn=IndicatorGetString(INDICATOR_SHORTNAME);
-   int w=ChartWindowFind(0,sn);
+   int w=ChartWindowFind(0,IND_SHORTNAME);
    if(w<1) w=1;
    return(w);
 }
@@ -199,7 +199,7 @@ bool DetectAndRender(const int total,const datetime &time[],const double &high[]
 int OnInit()
 {
    Dbg("OnInit entry");
-   IndicatorSetString(INDICATOR_SHORTNAME,"Professional Structural Stoch Divergence - Stage2+3 (MT5)");
+   IndicatorSetString(INDICATOR_SHORTNAME,IND_SHORTNAME);
    SetIndexBuffer(0,StochMainBuffer,INDICATOR_DATA); SetIndexBuffer(1,StochSignalBuffer,INDICATOR_DATA); SetIndexBuffer(2,StochSwingHighBuffer,INDICATOR_DATA); SetIndexBuffer(3,StochSwingLowBuffer,INDICATOR_DATA); SetIndexBuffer(4,PriceSwingHighState,INDICATOR_CALCULATIONS); SetIndexBuffer(5,PriceSwingLowState,INDICATOR_CALCULATIONS);
    PlotIndexSetInteger(2,PLOT_ARROW,159); PlotIndexSetInteger(3,PLOT_ARROW,159); PlotIndexSetDouble(2,PLOT_EMPTY_VALUE,EMPTY_VALUE); PlotIndexSetDouble(3,PLOT_EMPTY_VALUE,EMPTY_VALUE);
    ArraySetAsSeries(StochMainBuffer,true); ArraySetAsSeries(StochSignalBuffer,true); ArraySetAsSeries(StochSwingHighBuffer,true); ArraySetAsSeries(StochSwingLowBuffer,true); ArraySetAsSeries(PriceSwingHighState,true); ArraySetAsSeries(PriceSwingLowState,true); ArraySetAsSeries(ATRBuffer,true); ArraySetAsSeries(EMAFastBuffer,true); ArraySetAsSeries(EMASlowBuffer,true);
