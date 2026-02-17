@@ -44,6 +44,7 @@ double PriceSwingHighState[];
 double PriceSwingLowState[];
 
 string PREFIX = "PSD_DIV_MT4_";
+string IND_SHORTNAME = "Professional Structural Stoch Divergence - Stage2+3 (MT4)";
 string gLastAlertKey = "";
 datetime gLastAlertWhen = 0;
 datetime gLastStatsBar = 0;
@@ -51,7 +52,7 @@ datetime gLastStatsBar = 0;
 void Dbg(string s){ if(InpDebugLogs) Print("[DEBUG][MT4] ",s); }
 string TfStr(){ return(IntegerToString(Period())); }
 
-int GetSubwindow(){ int w=WindowFind(IndicatorShortName()); if(w<1) w=1; return(w); }
+int GetSubwindow(){ int w=WindowFind(IND_SHORTNAME); if(w<1) w=1; return(w); }
 
 void ResetWorkingBuffers(int total){ for(int i=0;i<total;i++){StochSwingHighBuffer[i]=EMPTY_VALUE;StochSwingLowBuffer[i]=EMPTY_VALUE;PriceSwingHighState[i]=EMPTY_VALUE;PriceSwingLowState[i]=EMPTY_VALUE;}}
 
@@ -182,7 +183,7 @@ bool DetectAndRender(const int total,const datetime &time[],const double &high[]
 int OnInit()
 {
    Dbg("OnInit entry");
-   IndicatorShortName("Professional Structural Stoch Divergence - Stage2+3 (MT4)");
+   IndicatorShortName(IND_SHORTNAME);
    SetIndexBuffer(0,StochMainBuffer); SetIndexStyle(0,DRAW_LINE,STYLE_SOLID,1,clrDeepSkyBlue); SetIndexLabel(0,"Stoch Main");
    SetIndexBuffer(1,StochSignalBuffer); SetIndexStyle(1,DRAW_LINE,STYLE_SOLID,1,clrOrange); SetIndexLabel(1,"Stoch Signal");
    SetIndexBuffer(2,StochSwingHighBuffer); SetIndexStyle(2,DRAW_ARROW,STYLE_SOLID,1,clrLimeGreen); SetIndexArrow(2,159); SetIndexLabel(2,"Stoch Swing High");
