@@ -13,3 +13,7 @@ Professional structural stochastic divergence indicator (MT4 / MT5).
 - Dedicated stochastic subwindow output (`#property indicator_separate_window`)
 - Always-plotted stochastic main/signal lines (default 5,3,3)
 - No WebRequest or internet calls in indicator code
+
+
+## Deterministic validation dataset
+- `testdata/deterministic_divergence_case1.csv` (synthetic OHLCV for reproducible divergence checks in tester/import workflows)
